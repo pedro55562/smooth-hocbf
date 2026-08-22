@@ -1,0 +1,24 @@
+# Virtual environments
+venv/
+.venv/
+cbf/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated HTML
+*.html
+
+# C++ build
+build/
+*.o
+*.so
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.log
