@@ -193,7 +193,7 @@ hist_qddot = np.asarray(hist_qddot)
 hist_t = np.asarray(hist_t)
 
 sim.save(
-    address="/home/pedro/Projects/new_cbf/manipulator/",
+    address="/home/pedro/Projects/smooth-hocbf/manipulator/",
     file_name="teste",
 )
 
