@@ -1,9 +1,61 @@
 import os
+import cvxpy as cp
 import numpy as np
 import uaibot as ub
 from scipy.linalg import expm
 from aux_functions import log_SE3
 from setup import create_scenario, plot_dist_min, plot_u_xi
+
+LOG_BARRIER_SCALE = 1e4
+
+
+class LogBarrierControlProblem:
+    def __init__(self, num_constraints, mu):
+        self.mu = mu
+        self.u = cp.Variable((6, 1), name="u")
+        self.A = cp.Parameter((num_constraints, 6), name="A")
+        self.b = cp.Parameter((num_constraints, 1), name="b")
+        self.u_d = cp.Parameter((6, 1), name="u_d")
+
+        self.g = self.A @ self.u - self.b
+        objective = cp.sum_squares(self.u - self.u_d) - mu * cp.sum(cp.log(LOG_BARRIER_SCALE * self.g))
+        self.problem = cp.Problem(cp.Minimize(objective))
+
+        self.solve_count = 0
+        self.success_count = 0
+        self.status_list = []
+        self.min_slack_list = []
+
+    def solve(self, A, b, u_d):
+        A_value = np.asarray(A, dtype=float)
+        b_value = np.asarray(b, dtype=float).reshape((-1, 1))
+        u_d_value = np.asarray(u_d, dtype=float).reshape((6, 1))
+
+        self.A.value = A_value
+        self.b.value = b_value
+        self.u_d.value = u_d_value
+
+        if self.u.value is None:
+            self.u.value = u_d_value
+
+        self.solve_count += 1
+        self.problem.solve(solver=cp.CLARABEL, warm_start=True)
+
+        status = self.problem.status
+        self.status_list.append(status)
+        if status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) or self.u.value is None:
+            return None, status, None
+
+        u_value = np.matrix(self.u.value)
+        slack = A_value @ np.asarray(u_value) - b_value
+        min_slack = float(np.min(slack))
+        self.min_slack_list.append(min_slack)
+
+        if min_slack <= 0:
+            return None, f"{status}_domain_violation", min_slack
+
+        self.success_count += 1
+        return u_value, status, min_slack
 
 def cmpt_lambda_terms(objA,objB,H,xi,h,eps):
     
@@ -46,7 +98,7 @@ def cmpt_lambda_terms(objA,objB,H,xi,h,eps):
     
     return lambda_AB, D_xi_lambda_AB, d_D_xi_lambda_AB_dt
     
-def cmpt_control(H,xi,obj_robot,list_obs,u_d,h=0.05,eps=0.01,eta=0.3,lambda_min=0.01,xi_lim=0.08):
+def cmpt_control(H,xi,obj_robot,list_obs,u_d,h=0.05,eps=0.01,eta=0.3,lambda_min=0.01,xi_lim=0.08,optimizer=None):
     falhou = False
     A = np.matrix(np.zeros((0,6)))
     b = np.matrix(np.zeros((0,1)))
@@ -69,13 +121,17 @@ def cmpt_control(H,xi,obj_robot,list_obs,u_d,h=0.05,eps=0.01,eta=0.3,lambda_min=
     A = np.vstack([A,-np.identity(6)])
     b = np.vstack([b,-xi_lim*np.ones((6,1))]) 
     
-    #Solve the QP
+    #Solve the log-barrier problem
     try:
-        u = ub.Utils.solve_qp(2*np.identity(6),-2*u_d,A,b)   
-    except:
+        if optimizer is None:
+            raise ValueError("optimizer must be a LogBarrierControlProblem")
+        u, status, min_slack = optimizer.solve(A, b, u_d)
+        if u is None:
+            raise RuntimeError(f"CLARABEL status: {status}, min_slack: {min_slack}")
+    except Exception as exc:
         falhou = True
-        print("\n QP Falhou!  ")
-        print("Tempo: ", t)
+        print("\n Log barrier falhou!  ")
+        print("Motivo: ", exc)
         sim.save(address=os.path.dirname(__file__),
                 file_name="se3_teste"
                 )
@@ -251,6 +307,7 @@ Kv = 20
 
 param_eta =  1.2
 param_obs_delta = 0.01
+mu = 5e-4
 
 # generalized distance parameters
 use_generalized_distance = True
@@ -261,6 +318,9 @@ if use_generalized_distance:
 else:
     dist_param_h   = 0
     dist_param_eps = 0
+
+num_control_constraints = len(all_obs) + 12
+control_optimizer = LogBarrierControlProblem(num_control_constraints, mu)
 
 ##############################
 #     Simulation Settings    #
@@ -301,7 +361,19 @@ if simular_movimento:
             ud, dist, idx = compute_ud(H, htm_path, xi, kt1, kt2, kt3, kn1, kn2, Kv) 
 
 
-        u, falhou = cmpt_control(H ,xi, robot_body_copy, all_obs, ud, dist_param_h, dist_param_eps, param_eta, param_obs_delta,xi_lim=1)        
+        u, falhou = cmpt_control(
+            H,
+            xi,
+            robot_body_copy,
+            all_obs,
+            ud,
+            dist_param_h,
+            dist_param_eps,
+            param_eta,
+            param_obs_delta,
+            xi_lim=1,
+            optimizer=control_optimizer,
+        )
         if falhou:
             break
         
@@ -331,6 +403,19 @@ if simular_movimento:
 ##############################
 #          Results           #
 ##############################
+print("Log barrier mu: ", mu)
+print("CLARABEL successful solves: ", f"{control_optimizer.success_count}/{control_optimizer.solve_count}")
+if error:
+    print("Final d(H): ", last_err)
+    print("Converged to target tolerance: ", last_err < 0.025)
+if control_optimizer.min_slack_list:
+    print("Minimum log-barrier domain slack: ", min(control_optimizer.min_slack_list))
+status_counts = {
+    status: control_optimizer.status_list.count(status)
+    for status in set(control_optimizer.status_list)
+}
+print("CLARABEL status counts: ", status_counts)
+
 sim.save(
     address=os.path.dirname(__file__),
     file_name="se3_teste",
