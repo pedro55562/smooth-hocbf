@@ -1284,9 +1284,8 @@ class Utils:
            
             
         if p_a_init is None:
-            if ((mode == 'c++') or (mode=='auto' and os.environ['CPP_SO_FOUND']=='1')) and h >= 1e-5:
-                dist_res = obj_a_cpp.dist_to(obj_b_cpp, 0.0, 0.0, tol, no_iter_max, np.matrix([0,0,0]).reshape((3,1)))
-                p_a = Utils.cvt(dist_res.proj_A)
+            if ((mode == 'c++') or (mode=='auto' and os.environ['CPP_SO_FOUND']=='1')) and (h > 0 or eps > 0):
+                p_a = Utils.cvt(np.matrix(obj_a_cpp.htm)[0:3, 3])
             else:
                 p_a = Utils.cvt(np.random.uniform(-3, 3, size=(3,)))
         else:

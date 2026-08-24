@@ -64,6 +64,22 @@ PYBIND11_MODULE(uaibot_cpp_bind, m) {
          .def("__str__", &FKPrimResult::toString)
          .def("__repr__", &FKPrimResult::toString);
 
+     py::class_<FkJgJgdotResult>(m, "CPP_FkJgJgdotResult")
+         .def(py::init<>())
+         .def_readonly("htm", &FkJgJgdotResult::htm)
+         .def_readonly("jac_geo", &FkJgJgdotResult::jac_geo)
+         .def_readonly("jac_geo_dot", &FkJgJgdotResult::jac_geo_dot)
+         .def("__str__", &FkJgJgdotResult::toString)
+         .def("__repr__", &FkJgJgdotResult::toString);
+
+     py::class_<CollisionSecondOrderResult>(m, "CPP_CollisionSecondOrderResult")
+         .def(py::init<>())
+         .def_readonly("htm", &CollisionSecondOrderResult::htm)
+         .def_readonly("jac_geo", &CollisionSecondOrderResult::jac_geo)
+         .def_readonly("jac_geo_dot", &CollisionSecondOrderResult::jac_geo_dot)
+         .def("__str__", &CollisionSecondOrderResult::toString)
+         .def("__repr__", &CollisionSecondOrderResult::toString);
+
      py::class_<TaskResult>(m, "CPP_TaskResult")
          .def(py::init<>())
          .def_readonly("task", &TaskResult::task)
@@ -119,12 +135,14 @@ PYBIND11_MODULE(uaibot_cpp_bind, m) {
          .def_readwrite("distance", &DistStructLinkObj::distance)
          .def_readwrite("point_link", &DistStructLinkObj::point_link)
          .def_readwrite("point_object", &DistStructLinkObj::point_object)
-         .def_readwrite("jac_distance", &DistStructLinkObj::jac_distance);
+         .def_readwrite("jac_distance", &DistStructLinkObj::jac_distance)
+         .def_readwrite("jac_distance_dot", &DistStructLinkObj::jac_distance_dot);
 
      py::class_<DistStructRobotObj>(m, "CPP_DistStructRobotObj")
          .def(py::init<>())
          .def_readwrite("is_null", &DistStructRobotObj::is_null)
          .def_readwrite("jac_dist_mat", &DistStructRobotObj::jac_dist_mat)
+         .def_readwrite("jac_dist_dot_mat", &DistStructRobotObj::jac_dist_dot_mat)
          .def_readwrite("dist_vect", &DistStructRobotObj::dist_vect)
          .def_readwrite("list_info", &DistStructRobotObj::list_info);
 
@@ -225,6 +243,12 @@ PYBIND11_MODULE(uaibot_cpp_bind, m) {
          .def("jac_geo_dot",
               static_cast<tuple<MatrixXf, vector<MatrixXf>, Matrix4f> (Manipulator::*)(VectorXf, VectorXf, Matrix4f) const>(&Manipulator::jac_geo_dot),
               py::arg("q"), py::arg("qdot"), py::arg("htm_world_base"))
+         .def("fk_jac_geo_dot",
+              static_cast<FkJgJgdotResult (Manipulator::*)(VectorXf, VectorXf, Matrix4f, string) const>(&Manipulator::fk_jac_geo_dot),
+              py::arg("q"), py::arg("qdot"), py::arg("htm_world_base"), py::arg("axis"))
+         .def("collision_second_order",
+              static_cast<CollisionSecondOrderResult (Manipulator::*)(VectorXf, VectorXf, Matrix4f) const>(&Manipulator::collision_second_order),
+              py::arg("q"), py::arg("qdot"), py::arg("htm_world_base"))
          .def("task_function_dot",
               static_cast<TaskDotResult (Manipulator::*)(VectorXf, VectorXf, Matrix4f, Matrix4f) const>(&Manipulator::task_function_dot),
               py::arg("q"), py::arg("qdot"), py::arg("htm_world_base"), py::arg("tg_htm"))
@@ -250,8 +274,8 @@ PYBIND11_MODULE(uaibot_cpp_bind, m) {
               static_cast<CheckFreeConfigResult (Manipulator::*)(VectorXf, Matrix4f, vector<GeometricPrimitives>, bool, bool, float, float, int) const>(&Manipulator::check_free_configuration),
               py::arg("q"), py::arg("htm"), py::arg("obstacles"), py::arg("check_joint"), py::arg("check_auto"), py::arg("tol"), py::arg("dist_tol"), py::arg("no_iter_max"))
          .def("compute_dist",
-              static_cast<DistStructRobotObj (Manipulator::*)(GeometricPrimitives, VectorXf, Matrix4f, DistStructRobotObj, float, int, float, float, float) const>(&Manipulator::compute_dist),
-              py::arg("obj"), py::arg("q"), py::arg("htm"), py::arg("old_dist_struct"), py::arg("tol"), py::arg("no_iter_max"), py::arg("max_dist"), py::arg("h"), py::arg("eps"))
+              static_cast<DistStructRobotObj (Manipulator::*)(GeometricPrimitives, VectorXf, VectorXf, Matrix4f, DistStructRobotObj, float, int, float, float, float) const>(&Manipulator::compute_dist),
+              py::arg("obj"), py::arg("q"), py::arg("qdot"), py::arg("htm"), py::arg("old_dist_struct"), py::arg("tol"), py::arg("no_iter_max"), py::arg("max_dist"), py::arg("h"), py::arg("eps"))
          .def("compute_dist_auto",
               static_cast<DistStructRobotAuto (Manipulator::*)(VectorXf, DistStructRobotAuto, float, int, float, float, float) const>(&Manipulator::compute_dist_auto),
               py::arg("q"), py::arg("old_dist_struct"), py::arg("tol"), py::arg("no_iter_max"), py::arg("max_dist"), py::arg("h"), py::arg("eps"))

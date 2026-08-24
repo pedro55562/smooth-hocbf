@@ -39,19 +39,29 @@ class DistStructLinkObj:
         """The Jacobian of the distance in the robot's configuration space."""
         return np.matrix(self._jac_distance)
 
+    @property
+    def jac_distance_dot(self) -> np.matrix:
+        """The time derivative of the distance Jacobian in configuration space."""
+        return np.matrix(self._jac_distance_dot)
+
     #######################################
     # Constructor
     #######################################
 
     def __init__(self, link_number: int, link_col_obj_number: int, distance: float, 
-                 point_link: np.matrix, point_object: np.matrix, jac_distance: np.matrix) -> "DistStructLinkObj":
+                 point_link: np.matrix, point_object: np.matrix, jac_distance: np.matrix,
+                 jac_distance_dot: Optional[np.matrix] = None) -> "DistStructLinkObj":
 
         self._link_number = link_number
         self._link_col_obj_number = link_col_obj_number
         self._distance = distance
         self._point_link = point_link
         self._point_object = point_object
-        self._jac_distance = jac_distance
+        self._jac_distance = np.matrix(jac_distance)
+        if jac_distance_dot is None:
+            self._jac_distance_dot = np.matrix(np.zeros((0, self._jac_distance.shape[1])))
+        else:
+            self._jac_distance_dot = np.matrix(jac_distance_dot)
 
     #######################################
     # Std. Print
@@ -66,6 +76,7 @@ class DistStructLinkObj:
         string += " Point link: " + str(self.point_link.tolist()) + " m\n"
         string += " Point object: " + str(self.point_object.tolist()) + " m\n"
         string += " Jacobian distance: " + str(self._jac_distance.tolist()) + "\n"
+        string += " Jacobian distance dot: " + str(self._jac_distance_dot.tolist()) + "\n"
         return string
 
 
@@ -91,6 +102,13 @@ class DistStructRobotObj:
 		Return the matrix in which each row we have the distance Jacobian (gradient) for each robot link.
 		"""
         return np.matrix(self._jac_dist_mat)
+
+    @property
+    def jac_dist_dot_mat(self) -> np.matrix:
+        """
+		Return the matrix in which each row has the time derivative of the distance Jacobian.
+		"""
+        return np.matrix(self._jac_dist_dot_mat)
 
     @property
     def dist_vect(self) -> np.matrix:
@@ -122,6 +140,7 @@ class DistStructRobotObj:
         n = len(robot.links)
         self._list_info = []
         self._jac_dist_mat = np.matrix(np.zeros((0, n)))
+        self._jac_dist_dot_mat = np.matrix(np.zeros((0, n)))
         self._dist_vect = []
 
     #######################################
@@ -137,12 +156,22 @@ class DistStructRobotObj:
     # Methods
     #######################################
 
-    def _append(self, link_number, link_col_obj_number, distance, point_link, point_object, jac_distance):
+    def _append(self, link_number, link_col_obj_number, distance, point_link, point_object, jac_distance,
+                jac_distance_dot=None):
+
+        jac_distance = np.matrix(jac_distance)
+        if jac_distance_dot is None:
+            jac_distance_dot = np.matrix(np.zeros((0, jac_distance.shape[1])))
+        else:
+            jac_distance_dot = np.matrix(jac_distance_dot)
 
         self._list_info.append(
-            DistStructLinkObj(link_number, link_col_obj_number, distance, point_link, point_object, jac_distance))
+            DistStructLinkObj(link_number, link_col_obj_number, distance, point_link, point_object,
+                              jac_distance, jac_distance_dot))
 
         self._jac_dist_mat = np.vstack((self._jac_dist_mat, jac_distance))
+        if jac_distance_dot.shape[0] > 0:
+            self._jac_dist_dot_mat = np.vstack((self._jac_dist_dot_mat, jac_distance_dot))
         self._dist_vect.append(distance)
         self._no_items += 1
 

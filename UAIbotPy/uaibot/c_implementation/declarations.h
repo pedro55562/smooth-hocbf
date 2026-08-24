@@ -83,6 +83,28 @@ struct FKPrimResult
     string toString() const;
 };
 
+struct FkJgJgdotResult
+{
+    vector<Matrix4f> htm;
+    vector<MatrixXf> jac_geo;
+    vector<MatrixXf> jac_geo_dot;
+
+    FkJgJgdotResult();
+
+    string toString() const;
+};
+
+struct CollisionSecondOrderResult
+{
+    vector<vector<Matrix4f>> htm;
+    vector<vector<MatrixXf>> jac_geo;
+    vector<vector<MatrixXf>> jac_geo_dot;
+
+    CollisionSecondOrderResult();
+
+    string toString() const;
+};
+
 struct TaskResult
 {
     VectorXf task;
@@ -203,6 +225,7 @@ struct DistStructLinkObj
     Vector3f point_link;
     Vector3f point_object;
     MatrixXf jac_distance;
+    MatrixXf jac_distance_dot;
 
     DistStructLinkObj();
 };
@@ -211,6 +234,7 @@ struct DistStructRobotObj
 {
     bool is_null;
     MatrixXf jac_dist_mat;
+    MatrixXf jac_dist_dot_mat;
     VectorXf dist_vect;
     vector<DistStructLinkObj> list_info;
 
@@ -347,6 +371,10 @@ struct Manipulator
 
     tuple<MatrixXf, vector<MatrixXf>, Matrix4f> jac_geo_dot(VectorXf q, VectorXf qdot, Matrix4f htm_world_base) const;
 
+    FkJgJgdotResult fk_jac_geo_dot(VectorXf q, VectorXf qdot, Matrix4f htm_world_base, string axis) const;
+
+    CollisionSecondOrderResult collision_second_order(VectorXf q, VectorXf qdot, Matrix4f htm_world_base) const;
+
     vector<FKPrimResult> fk_prim(const vector<VectorXf> &q, const vector<FKResult> &fk_res_all) const;
 
     FKPrimResult fk_prim(VectorXf q, Matrix4f htm_world_base) const;
@@ -360,7 +388,7 @@ struct Manipulator
     CheckFreeConfigResult check_free_configuration(VectorXf q, Matrix4f htm, vector<GeometricPrimitives> obstacles, bool check_joint,
                                                    bool check_auto, float tol, float dist_tol, int no_iter_max) const;
 
-    DistStructRobotObj compute_dist(GeometricPrimitives obj, VectorXf q, Matrix4f htm, DistStructRobotObj old_dist_struct,
+    DistStructRobotObj compute_dist(GeometricPrimitives obj, VectorXf q, VectorXf qdot, Matrix4f htm, DistStructRobotObj old_dist_struct,
                                                  float tol, int no_iter_max, float max_dist, float h, float eps) const;
 
     DistStructRobotAuto compute_dist_auto(VectorXf q, DistStructRobotAuto old_dist_struct,

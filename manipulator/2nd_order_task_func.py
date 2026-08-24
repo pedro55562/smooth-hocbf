@@ -132,7 +132,7 @@ def task_function_second_order(robot, htm_tg, q, qdot):
     htm_eef = np.asarray(htm_eef, dtype=float)
 
     # Analytical Jgdot
-    Jgdot, _, _ = robot.compute_jgdot(
+    _, _, Jgdot = robot.compute_jgdot(
         q=q,
         qdot=qdot
     )

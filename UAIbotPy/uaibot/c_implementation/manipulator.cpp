@@ -89,6 +89,26 @@ string FKPrimResult::toString() const
     return oss.str();
 }
 
+FkJgJgdotResult::FkJgJgdotResult() {};
+
+string FkJgJgdotResult::toString() const
+{
+    std::ostringstream oss;
+    oss << "FK, GEOMETRIC JACOBIAN AND GEOMETRIC JACOBIAN DERIVATIVE RESULT" << std::endl;
+    oss << "Number of frames: " << htm.size() << std::endl;
+    return oss.str();
+}
+
+CollisionSecondOrderResult::CollisionSecondOrderResult() {};
+
+string CollisionSecondOrderResult::toString() const
+{
+    std::ostringstream oss;
+    oss << "COLLISION OBJECT SECOND ORDER KINEMATICS RESULT" << std::endl;
+    oss << "Number of links: " << htm.size() << std::endl;
+    return oss.str();
+}
+
 ////////////////////////////////////////////////////////////////
 // INVERSE KINEMATIC
 ////////////////////////////////////////////////////////////////
@@ -2058,11 +2078,79 @@ FKResult Manipulator::fk(VectorXf q, Matrix4f htm_world_base, bool compute_jac) 
     return fk_res[0];
 }
 
-static tuple<MatrixXf, vector<MatrixXf>, FKResult> compute_jac_geo_dot_with_fk(
+static MatrixXf stack_jac_geo(const MatrixXf &jac_v, const MatrixXf &jac_w, int no_links)
+{
+    MatrixXf jac_geo(6, no_links);
+    jac_geo.block(0, 0, 3, no_links) = jac_v;
+    jac_geo.block(3, 0, 3, no_links) = jac_w;
+    return jac_geo;
+}
+
+static tuple<MatrixXf, vector<MatrixXf>> compute_jac_geo_dot_for_frame(
+    const Manipulator &manipulator,
+    const FKResult &fkres,
+    const VectorXf &qdot,
+    const Matrix4f &htm_world_base,
+    int ind_frame,
+    const Vector3f &p_i,
+    const MatrixXf &jac_v_i)
+{
+    int no_links = manipulator.no_links;
+    Matrix4f htm0 = htm_world_base * manipulator.htm_world_to_dh0;
+
+    vector<MatrixXf> jj_geo(no_links);
+    MatrixXf jgdot = MatrixXf::Zero(6, no_links);
+
+    for (int ind_col = 0; ind_col < no_links; ind_col++)
+    {
+        MatrixXf L_ij = MatrixXf::Zero(6, no_links);
+
+        if (ind_col <= ind_frame)
+        {
+            Vector3f p_j_ant;
+            Vector3f z_j_ant;
+
+            if (ind_col > 0)
+            {
+                p_j_ant = fkres.get_p_dh(ind_col - 1);
+                z_j_ant = fkres.get_z_dh(ind_col - 1);
+                Matrix3f s_z = s_mat(z_j_ant);
+
+                if (manipulator.joint_type[ind_col] == 0)
+                {
+                    L_ij.block(0, 0, 3, no_links) =
+                        s_mat(p_i - p_j_ant) * s_z * fkres.jac_w_dh[ind_col - 1] +
+                        s_z * (jac_v_i - fkres.jac_v_dh[ind_col - 1]);
+                    L_ij.block(3, 0, 3, no_links) = -s_z * fkres.jac_w_dh[ind_col - 1];
+                }
+
+                if (manipulator.joint_type[ind_col] == 1)
+                    L_ij.block(0, 0, 3, no_links) = -s_z * fkres.jac_w_dh[ind_col - 1];
+            }
+            else
+            {
+                p_j_ant = htm0.block<3, 1>(0, 3);
+                z_j_ant = htm0.block<3, 1>(0, 2);
+
+                if (manipulator.joint_type[ind_col] == 0)
+                    L_ij.block(0, 0, 3, no_links) = s_mat(z_j_ant) * jac_v_i;
+            }
+        }
+
+        jj_geo[ind_col] = L_ij;
+        jgdot.col(ind_col) = L_ij * qdot;
+    }
+
+    return make_tuple(jgdot, jj_geo);
+}
+
+static tuple<vector<MatrixXf>, MatrixXf, FKResult> compute_jac_geo_dot_with_fk(
     const Manipulator &manipulator,
     const VectorXf &q,
     const VectorXf &qdot,
-    const Matrix4f &htm_world_base)
+    const Matrix4f &htm_world_base,
+    bool compute_dh,
+    bool compute_eef)
 {
     int no_links = manipulator.no_links;
 
@@ -2072,67 +2160,151 @@ static tuple<MatrixXf, vector<MatrixXf>, FKResult> compute_jac_geo_dot_with_fk(
         throw std::runtime_error("The velocity vector qdot should have " + std::to_string(no_links) + " rows!");
 
     FKResult fkres = manipulator.fk(q, htm_world_base, true);
-    Matrix4f htm0 = htm_world_base * manipulator.htm_world_to_dh0;
-    int ind_frame = no_links - 1;
 
-    vector<MatrixXf> jj_geo(no_links);
-    MatrixXf jgdot = MatrixXf::Zero(6, no_links);
-    Vector3f p_i = fkres.get_p_dh(ind_frame);
-
-    for (int ind_col = 0; ind_col < no_links; ind_col++)
+    vector<MatrixXf> jgdot_dh;
+    if (compute_dh)
     {
-        MatrixXf L_ij = MatrixXf::Zero(6, no_links);
-        Vector3f p_j_ant;
-        Vector3f z_j_ant;
-
-        if (ind_col > 0)
+        jgdot_dh = vector<MatrixXf>(no_links);
+        for (int ind_frame = 0; ind_frame < no_links; ind_frame++)
         {
-            p_j_ant = fkres.get_p_dh(ind_col - 1);
-            z_j_ant = fkres.get_z_dh(ind_col - 1);
-            Matrix3f s_z = s_mat(z_j_ant);
-
-            if (manipulator.joint_type[ind_col] == 0)
-            {
-                L_ij.block(0, 0, 3, no_links) =
-                    s_mat(p_i - p_j_ant) * s_z * fkres.jac_w_dh[ind_col - 1] +
-                    s_z * (fkres.jac_v_dh[ind_frame] - fkres.jac_v_dh[ind_col - 1]);
-                L_ij.block(3, 0, 3, no_links) = -s_z * fkres.jac_w_dh[ind_col - 1];
-            }
-
-            if (manipulator.joint_type[ind_col] == 1)
-                L_ij.block(0, 0, 3, no_links) = -s_z * fkres.jac_w_dh[ind_col - 1];
+            tuple<MatrixXf, vector<MatrixXf>> frame_data = compute_jac_geo_dot_for_frame(
+                manipulator,
+                fkres,
+                qdot,
+                htm_world_base,
+                ind_frame,
+                fkres.get_p_dh(ind_frame),
+                fkres.jac_v_dh[ind_frame]);
+            jgdot_dh[ind_frame] = get<0>(frame_data);
         }
-        else
-        {
-            p_j_ant = htm0.block<3, 1>(0, 3);
-            z_j_ant = htm0.block<3, 1>(0, 2);
-
-            if (manipulator.joint_type[ind_col] == 0)
-                L_ij.block(0, 0, 3, no_links) = s_mat(z_j_ant) * fkres.jac_v_dh[ind_frame];
-        }
-
-        jj_geo[ind_col] = L_ij;
-        jgdot.col(ind_col) = L_ij * qdot;
     }
 
-    return make_tuple(jgdot, jj_geo, fkres);
+    MatrixXf jgdot_eef;
+    if (compute_eef)
+    {
+        tuple<MatrixXf, vector<MatrixXf>> eef_data = compute_jac_geo_dot_for_frame(
+            manipulator,
+            fkres,
+            qdot,
+            htm_world_base,
+            no_links - 1,
+            fkres.get_p_ee(),
+            fkres.jac_v_ee);
+        jgdot_eef = get<0>(eef_data);
+    }
+
+    return make_tuple(jgdot_dh, jgdot_eef, fkres);
 }
 
 tuple<MatrixXf, vector<MatrixXf>, Matrix4f> Manipulator::jac_geo_dot(VectorXf q, VectorXf qdot, Matrix4f htm_world_base) const
 {
-    tuple<MatrixXf, vector<MatrixXf>, FKResult> jac_data =
-        compute_jac_geo_dot_with_fk(*this, q, qdot, htm_world_base);
+    if (q.rows() != no_links)
+        throw std::runtime_error("The configuration vector q should have " + std::to_string(no_links) + " rows!");
+    if (qdot.rows() != no_links)
+        throw std::runtime_error("The velocity vector qdot should have " + std::to_string(no_links) + " rows!");
+
+    FKResult fkres = fk(q, htm_world_base, true);
+    tuple<MatrixXf, vector<MatrixXf>> frame_data = compute_jac_geo_dot_for_frame(
+        *this,
+        fkres,
+        qdot,
+        htm_world_base,
+        no_links - 1,
+        fkres.get_p_dh(no_links - 1),
+        fkres.jac_v_dh[no_links - 1]);
+
+    return make_tuple(get<0>(frame_data), get<1>(frame_data), fkres.htm_dh[no_links - 1]);
+}
+
+FkJgJgdotResult Manipulator::fk_jac_geo_dot(VectorXf q, VectorXf qdot, Matrix4f htm_world_base, string axis) const
+{
+    if (!(axis == "eef" || axis == "dh"))
+        throw std::runtime_error("The parameter 'axis' should be 'eef' or 'dh'.");
+
+    tuple<vector<MatrixXf>, MatrixXf, FKResult> jac_data =
+        compute_jac_geo_dot_with_fk(*this, q, qdot, htm_world_base, axis == "dh", axis == "eef");
+
+    vector<MatrixXf> jgdot_dh = get<0>(jac_data);
+    MatrixXf jgdot_eef = get<1>(jac_data);
     FKResult fkres = get<2>(jac_data);
 
-    return make_tuple(get<0>(jac_data), get<1>(jac_data), fkres.htm_dh[no_links - 1]);
+    FkJgJgdotResult result;
+
+    if (axis == "eef")
+    {
+        result.htm.push_back(fkres.htm_ee);
+        result.jac_geo.push_back(stack_jac_geo(fkres.jac_v_ee, fkres.jac_w_ee, no_links));
+        result.jac_geo_dot.push_back(jgdot_eef);
+    }
+    else
+    {
+        for (int ind_frame = 0; ind_frame < no_links; ind_frame++)
+        {
+            result.htm.push_back(fkres.htm_dh[ind_frame]);
+            result.jac_geo.push_back(stack_jac_geo(fkres.jac_v_dh[ind_frame], fkres.jac_w_dh[ind_frame], no_links));
+            result.jac_geo_dot.push_back(jgdot_dh[ind_frame]);
+        }
+    }
+
+    return result;
+}
+
+CollisionSecondOrderResult Manipulator::collision_second_order(VectorXf q, VectorXf qdot, Matrix4f htm_world_base) const
+{
+    tuple<vector<MatrixXf>, MatrixXf, FKResult> jac_data =
+        compute_jac_geo_dot_with_fk(*this, q, qdot, htm_world_base, true, false);
+
+    vector<MatrixXf> jgdot_dh = get<0>(jac_data);
+    FKResult fkres = get<2>(jac_data);
+
+    CollisionSecondOrderResult result;
+    result.htm = vector<vector<Matrix4f>>(no_links);
+    result.jac_geo = vector<vector<MatrixXf>>(no_links);
+    result.jac_geo_dot = vector<vector<MatrixXf>>(no_links);
+
+    for (int ind_link = 0; ind_link < no_links; ind_link++)
+    {
+        Matrix4f htm_i = fkres.htm_dh[ind_link];
+        Vector3f p_i = fkres.get_p_dh(ind_link);
+
+        MatrixXf jac_v_i = fkres.jac_v_dh[ind_link];
+        MatrixXf jac_w_i = fkres.jac_w_dh[ind_link];
+        MatrixXf jac_v_dot_i = jgdot_dh[ind_link].block(0, 0, 3, no_links);
+        MatrixXf jac_w_dot_i = jgdot_dh[ind_link].block(3, 0, 3, no_links);
+
+        Vector3f omega_i = jac_w_i * qdot;
+
+        for (int ind_obj = 0; ind_obj < geo_prim[ind_link].size(); ind_obj++)
+        {
+            Matrix4f htm_A = htm_i * geo_prim[ind_link][ind_obj].htm;
+            Vector3f p_A = htm_A.block<3, 1>(0, 3);
+            Vector3f r = p_A - p_i;
+            Vector3f rdot = omega_i.cross(r);
+
+            MatrixXf jac_v_A = jac_v_i - s_mat(r) * jac_w_i;
+            MatrixXf jac_w_A = jac_w_i;
+
+            MatrixXf jac_v_dot_A =
+                jac_v_dot_i -
+                s_mat(rdot) * jac_w_i -
+                s_mat(r) * jac_w_dot_i;
+            MatrixXf jac_w_dot_A = jac_w_dot_i;
+
+            result.htm[ind_link].push_back(htm_A);
+            result.jac_geo[ind_link].push_back(stack_jac_geo(jac_v_A, jac_w_A, no_links));
+            result.jac_geo_dot[ind_link].push_back(stack_jac_geo(jac_v_dot_A, jac_w_dot_A, no_links));
+        }
+    }
+
+    return result;
 }
 
 TaskDotResult Manipulator::task_function_dot(VectorXf q, VectorXf qdot, Matrix4f htm_world_base, Matrix4f tg_htm) const
 {
-    tuple<MatrixXf, vector<MatrixXf>, FKResult> jac_data =
-        compute_jac_geo_dot_with_fk(*this, q, qdot, htm_world_base);
+    tuple<vector<MatrixXf>, MatrixXf, FKResult> jac_data =
+        compute_jac_geo_dot_with_fk(*this, q, qdot, htm_world_base, false, true);
 
-    MatrixXf jgdot = get<0>(jac_data);
+    MatrixXf jgdot = get<1>(jac_data);
     FKResult fkres = get<2>(jac_data);
 
     MatrixXf jac_v = fkres.jac_v_ee;
@@ -2447,10 +2619,36 @@ DistStructLinkObj DistStructRobotObj::get_item(int ind_link, int ind_obj_link)
 
 DistStructRobotObj::DistStructRobotObj() {};
 
-DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q, Matrix4f htm, DistStructRobotObj old_dist_struct,
+DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q, VectorXf qdot, Matrix4f htm, DistStructRobotObj old_dist_struct,
                                              float tol, int no_iter_max, float max_dist, float h, float eps) const
 {
+    if (q.rows() != no_links)
+        throw std::runtime_error("The configuration vector q should have " + std::to_string(no_links) + " rows!");
+
+    bool compute_jac_distance_dot = (h > 1.0e-6 || eps > 1.0e-6);
+
+    if (compute_jac_distance_dot && qdot.rows() != no_links)
+        throw std::runtime_error("The velocity vector qdot should have " + std::to_string(no_links) + " rows!");
+
     FKResult fkres = fk(q, htm, true);
+
+    vector<MatrixXf> jgdot_dh;
+    if (compute_jac_distance_dot)
+    {
+        jgdot_dh = vector<MatrixXf>(no_links);
+        for (int ind_frame = 0; ind_frame < no_links; ind_frame++)
+        {
+            tuple<MatrixXf, vector<MatrixXf>> frame_data = compute_jac_geo_dot_for_frame(
+                *this,
+                fkres,
+                qdot,
+                htm,
+                ind_frame,
+                fkres.get_p_dh(ind_frame),
+                fkres.jac_v_dh[ind_frame]);
+            jgdot_dh[ind_frame] = get<0>(frame_data);
+        }
+    }
 
     AABB obj_aabb = obj.get_aabb();
 
@@ -2459,6 +2657,7 @@ DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q
     dsro.list_info = {};
 
     MatrixXf jac_tot = MatrixXf::Zero(0, q.rows());
+    MatrixXf jac_dot_tot = MatrixXf::Zero(0, q.rows());
     VectorXf dist_tot = VectorXf::Zero(0);
     int old_rows;
 
@@ -2469,6 +2668,16 @@ DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q
         Vector3f pc = fkres.get_p_dh(ind_links);
         MatrixXf Jvv = Jv + s_mat(pc) * Jw;
 
+        MatrixXf Jvdot;
+        MatrixXf Jwdot;
+        Vector3f omega_i = Vector3f::Zero();
+        if (compute_jac_distance_dot)
+        {
+            Jvdot = jgdot_dh[ind_links].block(0, 0, 3, no_links);
+            Jwdot = jgdot_dh[ind_links].block(3, 0, 3, no_links);
+            omega_i = Jw * qdot;
+        }
+
         for (int ind_obj_link = 0; ind_obj_link < geo_prim[ind_links].size(); ind_obj_link++)
         {
 
@@ -2477,26 +2686,56 @@ DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q
 
             if (AABB::dist_aabb(obj_copy.get_aabb(), obj_aabb) < max_dist)
             {
-                Vector3f p_obj_0;
-                if (old_dist_struct.is_null)
-                    p_obj_0 = obj.htm.block(0, 0, 3, 1);
+                PrimDistResult pdr;
+
+                if (compute_jac_distance_dot)
+                {
+                    Vector3f p_link_0;
+                    if (old_dist_struct.is_null)
+                    {
+                        p_link_0 = obj_copy.htm.block<3, 1>(0, 3);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            DistStructLinkObj dslo = old_dist_struct.get_item(ind_links, ind_obj_link);
+                            if (!dslo.is_null)
+                                p_link_0 = dslo.point_link;
+                            else
+                                p_link_0 = obj_copy.htm.block<3, 1>(0, 3);
+                        }
+                        catch (const std::exception &e)
+                        {
+                            p_link_0 = obj_copy.htm.block<3, 1>(0, 3);
+                        }
+                    }
+
+                    pdr = obj_copy.dist_to(obj, h, eps, tol, no_iter_max, p_link_0);
+                }
                 else
                 {
-                    try
-                    {
-                        DistStructLinkObj dslo = old_dist_struct.get_item(ind_links, ind_obj_link);
-                        if (!dslo.is_null)
-                            p_obj_0 = dslo.point_object;
-                        else
-                            p_obj_0 = obj.htm.block(0, 0, 3, 1);
-                    }
-                    catch (const std::exception &e)
-                    {
+                    Vector3f p_obj_0;
+                    if (old_dist_struct.is_null)
                         p_obj_0 = obj.htm.block(0, 0, 3, 1);
+                    else
+                    {
+                        try
+                        {
+                            DistStructLinkObj dslo = old_dist_struct.get_item(ind_links, ind_obj_link);
+                            if (!dslo.is_null)
+                                p_obj_0 = dslo.point_object;
+                            else
+                                p_obj_0 = obj.htm.block(0, 0, 3, 1);
+                        }
+                        catch (const std::exception &e)
+                        {
+                            p_obj_0 = obj.htm.block(0, 0, 3, 1);
+                        }
                     }
-                }
 
-                PrimDistResult pdr = obj.dist_to(obj_copy, h, eps, tol, no_iter_max, p_obj_0);
+                    pdr = obj.dist_to(obj_copy, h, eps, tol, no_iter_max, p_obj_0);
+                }
 
                 DistStructLinkObj dslo_new;
 
@@ -2504,20 +2743,75 @@ DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q
                 dslo_new.distance = pdr.dist;
                 dslo_new.link_number = ind_links;
                 dslo_new.link_col_obj_number = ind_obj_link;
-                dslo_new.point_object = pdr.proj_A;
-                dslo_new.point_link = pdr.proj_B;
-                MatrixXf dv = (pdr.proj_B - pdr.proj_A).transpose();
-                dslo_new.jac_distance = (dv * Jvv - (dv * s_mat(pdr.proj_A)) * Jw) / (pdr.dist + 1e-6);
+                dslo_new.jac_distance_dot = MatrixXf::Zero(0, q.rows());
 
-                if (obj.type == 3 && !(h < 1e-5 && eps < 1e-5))
+                if (compute_jac_distance_dot)
                 {
-                    dslo_new.jac_distance += (pdr.proj_B.cross(pdr.proj_A) - pdr.aux).transpose() * Jw / (pdr.dist + 1e-6);
-                    // cout << "aaa = " << ((pdr.proj_B.cross(pdr.proj_A) - pdr.aux).transpose() * Jw / (pdr.dist + 1e-6)).norm() << std::endl;
+                    dslo_new.point_link = pdr.proj_A;
+                    dslo_new.point_object = pdr.proj_B;
+
+                    Vector3f p_A_origin = obj_copy.htm.block<3, 1>(0, 3);
+                    Vector3f r = p_A_origin - pc;
+                    Vector3f rdot = omega_i.cross(r);
+
+                    MatrixXf jac_A = stack_jac_geo(Jv - s_mat(r) * Jw, Jw, no_links);
+                    MatrixXf jac_A_dot = stack_jac_geo(
+                        Jvdot - s_mat(rdot) * Jw - s_mat(r) * Jwdot,
+                        Jwdot,
+                        no_links);
+
+                    VectorXf xi_A = jac_A * qdot;
+                    Vector3f v_A = xi_A.block(0, 0, 3, 1);
+                    Vector3f w_A = xi_A.block(3, 0, 3, 1);
+
+                    Vector3f a_star = pdr.proj_A;
+                    Vector3f b_star = pdr.proj_B;
+
+                    Vector3f psi_A_a = v_A + s_mat(w_A) * (a_star - p_A_origin);
+                    Vector3f psi_A_b = v_A + s_mat(w_A) * (b_star - p_A_origin);
+                    Matrix3f J_Pi_A = obj_copy.projection_jacobian(b_star, h, eps);
+                    Matrix3f J_Pi_B = obj.projection_jacobian(a_star, h, eps);
+                    Vector3f d_Pi_A_dt = psi_A_a - J_Pi_A * psi_A_b;
+                    Vector3f a_star_dot = (Matrix3f::Identity() - J_Pi_A * J_Pi_B).inverse() * d_Pi_A_dt;
+                    Vector3f b_star_dot = J_Pi_B * a_star_dot;
+
+                    float denom = pdr.dist + 1e-6;
+
+                    MatrixXf D_xi_lambda = MatrixXf::Zero(1, 6);
+                    D_xi_lambda.block(0, 0, 1, 3) = (a_star - b_star).transpose() / denom;
+                    D_xi_lambda.block(0, 3, 1, 3) = (s_mat(b_star - p_A_origin) * (a_star - b_star)).transpose() / denom;
+
+                    MatrixXf d_D_xi_Lambda_dt = MatrixXf::Zero(1, 6);
+                    d_D_xi_Lambda_dt.block(0, 0, 1, 3) = (a_star_dot - b_star_dot).transpose();
+                    d_D_xi_Lambda_dt.block(0, 3, 1, 3) =
+                        (s_mat(b_star - p_A_origin) * (a_star_dot - b_star_dot) +
+                         s_mat(b_star_dot - v_A) * (a_star - b_star))
+                            .transpose();
+
+                    float D_xi = (D_xi_lambda * xi_A)(0, 0);
+                    MatrixXf d_D_xi_lambda_dt = (d_D_xi_Lambda_dt - D_xi * D_xi_lambda) / denom;
+
+                    dslo_new.jac_distance = D_xi_lambda * jac_A;
+                    dslo_new.jac_distance_dot = d_D_xi_lambda_dt * jac_A + D_xi_lambda * jac_A_dot;
+                }
+                else
+                {
+                    dslo_new.point_object = pdr.proj_A;
+                    dslo_new.point_link = pdr.proj_B;
+                    MatrixXf dv = (pdr.proj_B - pdr.proj_A).transpose();
+                    dslo_new.jac_distance = (dv * Jvv - (dv * s_mat(pdr.proj_A)) * Jw) / (pdr.dist + 1e-6);
                 }
 
                 old_rows = jac_tot.rows();
                 jac_tot.conservativeResize(old_rows + 1, Eigen::NoChange);
                 jac_tot.block(old_rows, 0, 1, dslo_new.jac_distance.cols()) = dslo_new.jac_distance;
+
+                if (compute_jac_distance_dot)
+                {
+                    old_rows = jac_dot_tot.rows();
+                    jac_dot_tot.conservativeResize(old_rows + 1, Eigen::NoChange);
+                    jac_dot_tot.block(old_rows, 0, 1, dslo_new.jac_distance_dot.cols()) = dslo_new.jac_distance_dot;
+                }
 
                 old_rows = dist_tot.rows();
                 dist_tot.conservativeResize(old_rows + 1, Eigen::NoChange);
@@ -2529,6 +2823,7 @@ DistStructRobotObj Manipulator::compute_dist(GeometricPrimitives obj, VectorXf q
     }
 
     dsro.jac_dist_mat = jac_tot;
+    dsro.jac_dist_dot_mat = jac_dot_tot;
     dsro.dist_vect = dist_tot;
 
     return dsro;

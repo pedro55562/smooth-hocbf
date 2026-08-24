@@ -586,9 +586,9 @@ class Robot:
         return _jac_jac_geo(self, q, axis, htm)
 
 
-    def compute_jgdot(self, q, qdot):
+    def compute_jgdot(self, q=None, qdot=None, axis="eef", htm=None):
         """
-        Compute the time derivative of the geometric Jacobian.
+        Compute forward kinematics, the geometric Jacobian and its time derivative.
 
         Parameters
         ----------
@@ -598,25 +598,115 @@ class Robot:
         qdot : array-like
             Joint velocity.
 
+        axis : str
+            ``"eef"`` for the real end-effector or ``"dh"`` for all DH frames.
+
+        htm : array-like
+            Robot base homogeneous transformation.
+
         Returns
         -------
-        jgdot : numpy.ndarray
-            Time derivative of the geometric Jacobian.
-
-        jgdot2
-            Auxiliary Jacobian-related data returned by the C++ implementation.
-
         fkm
-            Forward kinematics data returned by the C++ implementation.
+            For ``axis="eef"``, a 4 x 4 matrix. For ``axis="dh"``, a list
+            of n homogeneous transformation matrices.
+
+        jg
+            For ``axis="eef"``, a 6 x n matrix. For ``axis="dh"``, a list
+            of n geometric Jacobians.
+
+        jgdot
+            For ``axis="eef"``, a 6 x n matrix. For ``axis="dh"``, a list
+            of n geometric Jacobian time derivatives.
         """
 
-        jgdot, jgdot2, fkm = self.cpp_robot.jac_geo_dot(
+        if q is None:
+            q = self.q
+
+        if htm is None:
+            htm = self.htm
+
+        n = len(self.links)
+
+        if qdot is None:
+            raise Exception("The parameter 'qdot' should be a " + str(n) + " dimensional vector.")
+
+        if axis not in ["eef", "dh"]:
+            raise Exception("The parameter 'axis' should be 'eef' or 'dh'.")
+
+        if not Utils.is_a_matrix(htm, 4, 4):
+            raise Exception("The parameter 'htm' should be a 4x4 homogeneous transformation matrix.")
+
+        if not Utils.is_a_vector(q, n):
+            raise Exception("The parameter 'q' should be a " + str(n) + " dimensional vector.")
+
+        if not Utils.is_a_vector(qdot, n):
+            raise Exception("The parameter 'qdot' should be a " + str(n) + " dimensional vector.")
+
+        if os.environ['CPP_SO_FOUND'] == '0':
+            raise Exception("The C++ extension is required to compute Jgdot.")
+
+        res = self.cpp_robot.fk_jac_geo_dot(
             Utils.cvt(q),
             Utils.cvt(qdot),
-            self.htm
+            Utils.cvt(htm),
+            axis
         )
 
-        return np.asarray(jgdot, dtype=float), jgdot2, fkm
+        if axis == "eef":
+            return (
+                np.asarray(res.htm[0], dtype=float),
+                np.asarray(res.jac_geo[0], dtype=float),
+                np.asarray(res.jac_geo_dot[0], dtype=float)
+            )
+
+        return (
+            [np.asarray(htm_i, dtype=float) for htm_i in res.htm],
+            [np.asarray(jg_i, dtype=float) for jg_i in res.jac_geo],
+            [np.asarray(jgdot_i, dtype=float) for jgdot_i in res.jac_geo_dot]
+        )
+
+    def compute_col_object_kinematics_second_order(self, q=None, qdot=None, htm=None):
+        """
+        Compute collision-object forward kinematics, geometric Jacobians and
+        geometric Jacobian time derivatives in batch.
+
+        Returns nested lists indexed as ``[link][collision_object]``.
+        """
+
+        if q is None:
+            q = self.q
+
+        if htm is None:
+            htm = self.htm
+
+        n = len(self.links)
+
+        if qdot is None:
+            raise Exception("The parameter 'qdot' should be a " + str(n) + " dimensional vector.")
+
+        if not Utils.is_a_matrix(htm, 4, 4):
+            raise Exception("The parameter 'htm' should be a 4x4 homogeneous transformation matrix.")
+
+        if not Utils.is_a_vector(q, n):
+            raise Exception("The parameter 'q' should be a " + str(n) + " dimensional vector.")
+
+        if not Utils.is_a_vector(qdot, n):
+            raise Exception("The parameter 'qdot' should be a " + str(n) + " dimensional vector.")
+
+        if os.environ['CPP_SO_FOUND'] == '0':
+            raise Exception("The C++ extension is required to compute collision-object second-order kinematics.")
+
+        res = self.cpp_robot.collision_second_order(
+            Utils.cvt(q),
+            Utils.cvt(qdot),
+            Utils.cvt(htm)
+        )
+
+        return (
+            [[np.asarray(htm_A, dtype=float) for htm_A in link_htm] for link_htm in res.htm],
+            [[np.asarray(jac_A, dtype=float) for jac_A in link_jac] for link_jac in res.jac_geo],
+            [[np.asarray(jacdot_A, dtype=float) for jacdot_A in link_jacdot] for link_jacdot in res.jac_geo_dot]
+        )
 
     def compute_jrdot(self, htm_tg, q=None, qdot=None, htm=None):
         """
@@ -1411,7 +1501,7 @@ class Robot:
     #######################################
 
     def compute_dist(self, obj: MetricObject, q: Optional[Vector] = None, htm: Optional[HTMatrix]=None, 
-                     old_dist_struct : Optional["DistStructRobotObj"] = None, tol: float = 0.0005, 
+                     old_dist_struct : Optional["DistStructRobotObj"] = None, qdot: Optional[Vector] = None, tol: float = 0.0005, 
                      no_iter_max: int = 20, max_dist: float = np.inf, h: float = 0, eps: float = 0, 
                      mode: str = 'auto') -> "DistStructRobotObj":
         """
@@ -1424,7 +1514,7 @@ class Robot:
 
     The distance is either Euclidean distance or differentiable.
     
-    If h>0 or eps > 0, it computes the Euclidean distance and it uses GJK's algorithm.
+    If h=0 and eps=0, it computes the Euclidean distance and it uses GJK's algorithm.
     
     Else, it computes the differentiable distance through Generalized Alternating Projection (GAP).
     See the paper 'A Differentiable Distance Metric for Robotics Through Generalized Alternating Projection'.
@@ -1449,6 +1539,10 @@ class Robot:
         Can be used to enhance the algorithm speed using the previous closest
         point as an initial guess.
         (default: None).
+
+    qdot : a nD vector (n-element list/tuple, (n,1)/(1,n)/(n,)-shaped numpy matrix/numpy array)
+        The manipulator's joint velocity. Used to compute jac_distance_dot for smooth distance.
+        (default: zero velocity).
 
     tol : positive float
         Convergence criterion of GAP: it stops when ||a[k+1]-a[k]|| < tol.
@@ -1488,7 +1582,7 @@ class Robot:
         collision model. Contains a list of m 'DistStructLinkObj' objects.
     """
 
-        return _compute_dist(self, obj, q, htm, old_dist_struct, tol, no_iter_max, max_dist, h, eps, mode)
+        return _compute_dist(self, obj, q, htm, qdot, old_dist_struct, tol, no_iter_max, max_dist, h, eps, mode)
 
     def compute_dist_auto(self, q: Optional[Vector] = None, old_dist_struct: Optional["DistStructRobotAuto"]=None, 
                           tol: float =0.0005, no_iter_max: int = 20, max_dist: float = np.inf, 

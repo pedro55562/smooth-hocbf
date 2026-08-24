@@ -13,7 +13,7 @@ if os.environ['CPP_SO_FOUND']=="1":
 
 def _diststructlinkobj_cpp2py(dslo_cpp):
 
-    dslo_py = DistStructLinkObj(dslo_cpp.link_number, dslo_cpp.link_col_obj_number, dslo_cpp.distance, np.matrix(dslo_cpp.point_link).reshape((3,1)), np.matrix(dslo_cpp.point_object).reshape((3,1)), np.matrix(dslo_cpp.jac_distance))
+    dslo_py = DistStructLinkObj(dslo_cpp.link_number, dslo_cpp.link_col_obj_number, dslo_cpp.distance, np.matrix(dslo_cpp.point_link).reshape((3,1)), np.matrix(dslo_cpp.point_object).reshape((3,1)), np.matrix(dslo_cpp.jac_distance), np.matrix(dslo_cpp.jac_distance_dot))
 
     #dslo_py = DistStructLinkObj(dslo_cpp.link_number, dslo_cpp.link_col_obj_number, dslo_cpp.distance, dslo_cpp.point_link, dslo_cpp.point_object, dslo_cpp.jac_distance)
 
@@ -31,6 +31,7 @@ def _diststructlinkobj_py2cpp(dslo_py):
     dslo_cpp.point_link = dslo_py.point_link
     dslo_cpp.point_object = dslo_py.point_object
     dslo_cpp.jac_distance = dslo_py.jac_distance
+    dslo_cpp.jac_distance_dot = dslo_py.jac_distance_dot
 
     return dslo_cpp
 
@@ -39,6 +40,7 @@ def _diststructrobotobj_cpp2py(dslo_cpp, _obj, _robot):
     dsro_py = DistStructRobotObj(_obj, _robot)
 
     dsro_py._jac_dist_mat = np.matrix(dslo_cpp.jac_dist_mat)
+    dsro_py._jac_dist_dot_mat = np.matrix(dslo_cpp.jac_dist_dot_mat)
     n = np.shape(dslo_cpp.dist_vect)[0]
     dsro_py._dist_vect = np.matrix(dslo_cpp.dist_vect).reshape((n,1))
     
@@ -54,6 +56,7 @@ def _diststructrobotobj_py2cpp(dslo_py):
     dsro_cpp.is_null = dslo_py is None
     if not (dslo_py is None):
         dsro_cpp.jac_dist_mat = dslo_py.jac_dist_mat
+        dsro_cpp.jac_dist_dot_mat = dslo_py.jac_dist_dot_mat
         dsro_cpp.dist_vect = dslo_py.dist_vect
         dsro_cpp.list_info = [_diststructlinkobj_py2cpp(dslo) for dslo in dslo_py._list_info]
 
@@ -61,7 +64,7 @@ def _diststructrobotobj_py2cpp(dslo_py):
 
 
 
-def _compute_dist(self, obj, q=None, htm=None, old_dist_struct=None, tol=0.0005, no_iter_max=20,
+def _compute_dist(self, obj, q=None, htm=None, qdot=None, old_dist_struct=None, tol=0.0005, no_iter_max=20,
                   max_dist = np.inf, h=0, eps = 0, mode='auto'):
     
     n = len(self.links)
@@ -72,9 +75,15 @@ def _compute_dist(self, obj, q=None, htm=None, old_dist_struct=None, tol=0.0005,
     if htm is None:
         htm = self.htm
 
+    if qdot is None:
+        qdot = np.zeros(n)
+
     # Error handling
     if not Utils.is_a_vector(q, n):
         raise Exception("The parameter 'q' should be a " + str(n) + " dimensional vector.")
+
+    if not Utils.is_a_vector(qdot, n):
+        raise Exception("The parameter 'qdot' should be a " + str(n) + " dimensional vector.")
 
     if not Utils.is_a_matrix(htm, 4, 4):
         raise Exception("The parameter 'htm' should be a 4x4 homogeneous transformation matrix.")
@@ -120,7 +129,7 @@ def _compute_dist(self, obj, q=None, htm=None, old_dist_struct=None, tol=0.0005,
         
 
         old_dsro = _diststructrobotobj_py2cpp(old_dist_struct)    
-        new_dsro = self.cpp_robot.compute_dist(obj.cpp_obj, q, htm, old_dsro, tol, no_iter_max, max_dist, h+1e-6, eps+1e-6)
+        new_dsro = self.cpp_robot.compute_dist(obj.cpp_obj, Utils.cvt(q), Utils.cvt(qdot), Utils.cvt(htm), old_dsro, tol, no_iter_max, max_dist, h, eps)
 
         return _diststructrobotobj_cpp2py(new_dsro, obj, self)
             
