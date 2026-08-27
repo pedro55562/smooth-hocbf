@@ -243,6 +243,7 @@ def create_scenario():
         ub.Utils.trn([3.0, 1.2, 0.8])
         * ub.Utils.rotz(np.pi / 3)
         * ub.Utils.roty(np.pi)
+        * ub.Utils.rotx(np.pi/6)
     )
 
     # ============================
@@ -355,7 +356,7 @@ def create_scenario():
     # Simulation parameters
     # ============================
 
-    dt = 0.05
+    dt = 0.01
     t_max = 40
 
     H = np.matrix(initial_htm)
